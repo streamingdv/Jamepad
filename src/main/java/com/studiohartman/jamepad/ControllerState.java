@@ -268,6 +268,33 @@ public final class ControllerState implements Serializable {
     public final boolean touchpadButtonJustPressed;
 
     /**
+     * PS4/PS5 touchpad information for the finger with index 0.
+     * If enhanced Sony controller features are
+     * not enabled via the {@link com.studiohartman.jamepad.Configuration} or
+     * if the controller reports that this feature is not supported this value
+     * will be null.
+     */
+    public TouchState touchStateFinger0 = null;
+
+    /**
+     * PS4/PS5 touchpad information for the finger with index 1.
+     * If enhanced Sony controller features are
+     * not enabled via the {@link com.studiohartman.jamepad.Configuration} or
+     * if the controller reports that this feature is not supported this value
+     * will be null.
+     */
+    public TouchState touchStateFinger1 = null;
+
+    /**
+     * PS4/PS5 sensor information.
+     * If enhanced Sony controller features are
+     * not enabled via the {@link com.studiohartman.jamepad.Configuration} or
+     * if the controller reports that this feature is not supported this value
+     * will be null.
+     */
+    public SensorState sensorState = null;
+
+    /**
      * Return a controller state based on the current state of the passed controller.
      *
      * If the controller a disconnected mid-read, the disconnected controller is returned, and the
@@ -350,6 +377,20 @@ public final class ControllerState implements Serializable {
         paddle3 = c.isButtonPressed(ControllerButton.BUTTON_PADDLE3);
         paddle4 = c.isButtonPressed(ControllerButton.BUTTON_PADDLE4);
         touchpadButton = c.isButtonPressed(ControllerButton.BUTTON_TOUCHPAD);
+
+        if(c.isUsingSonyControllerFeatures()) {
+            if(c.isSupportingTouchpadData()) {
+                touchStateFinger0 = new TouchState();
+                touchStateFinger0.update(c.getTouchpadFinger(0));
+                touchStateFinger1 = new TouchState();
+                touchStateFinger1.update(c.getTouchpadFinger(0));
+            }
+
+            if(c.isSupportingSensorData()) {
+                sensorState = new SensorState();
+                sensorState.update(c.getSensorState());
+            }
+        }
     }
 
     private ControllerState() {
@@ -410,5 +451,9 @@ public final class ControllerState implements Serializable {
         paddle3 = false;
         paddle4 = false;
         touchpadButton = false;
+
+        touchStateFinger0 = null;
+        touchStateFinger1 = null;
+        sensorState = null;
     }
 }

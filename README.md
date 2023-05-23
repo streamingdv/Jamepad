@@ -15,7 +15,7 @@ Jamepad has:
   - A permissive license (see below).
 
 This fork improved the following points compared to last real [Jamepad version 1.3.2](https://github.com/williamahartman/Jamepad/tree/ae170a95eb7c14d82b19328480b1ab5a45b77001):
-* This fork builts the native library on Github Actions. You can see all the magic happen there. Moreover, if you fork this repo and adjust settings, you are immediately ready to go with your own build! We are open for PRs though.
+* This fork builts the native library on GitHub Actions. You can see all the magic happen there. Moreover, if you fork this repo and adjust settings, you are immediately ready to go with your own build! We are open for PRs though.
 * New features added, newer SDL version used
 * Natives are smaller in size
 * Natives for arm architecture included
@@ -73,7 +73,7 @@ ControllerManager controllers = new ControllerManager();
 controllers.initSDLGamepad();
 ```
 
-For most applications, using the getState() method in ControllerManager is best. This method returns an immutable ControllerState object that describes the state of the controller at the instant the method is called. Using this method, you don't need to litter code with a bunch of exceoption handling or handle the possiblity of controller disconnections at weird times. 
+For most applications, using the getState() method in ControllerManager is best. This method returns an immutable ControllerState object that describes the state of the controller at the instant the method is called. Using this method, you don't need to litter code with a bunch of exception handling or handle the possibility of controller disconnections at weird times. 
 
 If a controller is disconnected, the returned ControllerState object has the isConnected field set to false. All other fields are either false (for buttons) or 0 (for axes).
 
@@ -126,6 +126,37 @@ When you're finished with your gamepad stuff, you should call quitSDLGamepad() t
 ```java
 controllers.quitSDLGamepad();
 ```
+
+#### Using DualSense/ DualShock features
+
+You can also access Sony specific controller features like touchpad, sensor data (gyroscope/ accelerometer) and adaptive
+triggers with this library. In order to activate these features you have to initialize the ControllerManager like this
+
+```java
+final Configuration configuration = new Configuration();
+configuration.useSonyControllerFeatures = true;
+ControllerManager controllers = new ControllerManager(configuration);
+```
+
+If this Sony controller feature is enabled and your controller supports touchpad data and sensor data, ControllerState
+will be  filled with 3 additional objects every time you call getState(). Two TouchState objects and one SensorData
+object. ControllerIndex will reuse already created objects instead of creating new ones.
+
+Sending adaptive trigger data only has an effect if the connected controller is a DualSense controller. If you want to
+send adaptive trigger data to the DualSense with index 0 you can do it like this
+
+```java
+/* Constant resistance across entire trigger pull */
+byte leftTriggerEffect = 0x01;
+byte[] leftAdaptiveTriggerData = new byte[]{ 0, 110, 0, 0, 0, 0, 0, 0, 0, 0 };
+/* Resistance and vibration when trigger is pulled */
+byte rightTriggerEffect = 0x06;
+byte[] rightAdaptiveTriggerData = new byte[]{ 15, 63, (byte) 128, 0, 0, 0, 0, 0, 0, 0 };
+
+controllers.sendAdaptiveTriggers(0, leftTriggerEffect, leftAdaptiveTriggerData, rightTriggerEffect, rightAdaptiveTriggerData);
+```
+
+More information about the adaptive trigger data can [be found here](https://controllers.fandom.com/wiki/Sony_DualSense#FFB_Trigger_Modes).
 
 ## Building Jamepad
 

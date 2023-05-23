@@ -8,6 +8,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.Objects;
 
 /**
  * This class handles initializing the native library, connecting to controllers, and managing the
@@ -30,8 +31,11 @@ public class ControllerManager {
     SDL_Event event;
     */
 
+    private static final boolean IS_UNIX = System.getProperty("os.name", "").toLowerCase().contains("nix") ||
+            System.getProperty("os.name", "").toLowerCase().contains("nux");
+
     private final Configuration configuration;
-    private String mappingsPath;
+    private final String mappingsPath;
     private boolean isInitialized;
     private ControllerIndex[] controllers;
 
@@ -70,6 +74,20 @@ public class ControllerManager {
     }
 
     /**
+     * Set a hint with normal priority.
+     * @param name the hint to set
+     * @param value the value of the hint variable
+     * @return true if the hint was set, false otherwise.
+     */
+    public boolean setSdlHint(String name, String value) {
+        return nativeSetSdlHint(name, value);
+    }
+
+    private native boolean nativeSetSdlHint(String name, String value); /*
+        return SDL_SetHint(name, value) == SDL_TRUE ? JNI_TRUE : JNI_FALSE;
+    */
+
+    /**
      * Initialize the ControllerIndex library. This loads the native library and initializes SDL
      * in the native code.
      *
@@ -79,12 +97,31 @@ public class ControllerManager {
         if(isInitialized) {
             throw new IllegalStateException("SDL is already initialized!");
         }
+        Configuration.SonyControllerFeature sonyControllerFeature = configuration.useSonyControllerFeatures;
 
         //Initialize SDL
-        if (!nativeInitSDLGamepad(!configuration.useRawInput)) {
+        if (!nativeInitSDLGamepad(!configuration.useRawInput, sonyControllerFeature.getValue())) {
             throw new IllegalStateException("Failed to initialize SDL in native method!");
         } else {
             isInitialized = true;
+        }
+
+        if(Objects.equals(Configuration.SonyControllerFeature.DUALSENSE_FEATURES_AND_HAPTICS, sonyControllerFeature)) {
+            if(IS_UNIX){
+                String audioDriverName = getCurrentAudioDriverName();
+                if(!nativeInitHapticsOnUnix()) {
+                    System.err.println("Failed to load SLD Audio for DualSense haptics with pipewire" + getLastNativeError() + ". Try again with standard driver");
+                    if(!nativeInitHaptics(audioDriverName == null || audioDriverName.isEmpty() ? "pulse" : audioDriverName)) {
+                        System.err.println("Failed to load SLD Audio for DualSense haptics " + getLastNativeError());
+                        sonyControllerFeature = Configuration.SonyControllerFeature.DUALSENSE_FEATURES; // Fallback
+                    }
+                }
+            } else {
+                if(!nativeInitHaptics()) {
+                    System.err.println("Failed to load SLD Audio for DualSense haptics " + getLastNativeError());
+                    sonyControllerFeature = Configuration.SonyControllerFeature.DUALSENSE_FEATURES; // Fallback
+                }
+            }
         }
 
         //Set controller mappings. The possible exception is caught, since stuff will still work ok
@@ -99,12 +136,20 @@ public class ControllerManager {
 
         //Connect and keep track of the controllers
         for(int i = 0; i < controllers.length; i++) {
-            controllers[i] = new ControllerIndex(i);
+            controllers[i] = new ControllerIndex(i, sonyControllerFeature);
         }
     }
-    private native boolean nativeInitSDLGamepad(boolean disableRawInput); /*
+    private native boolean nativeInitSDLGamepad(boolean disableRawInput, int sonyControllerFeature); /*
         if (disableRawInput) {
             SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT, "0");
+        }
+        if(sonyControllerFeature != 0) {
+            SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS4_RUMBLE, "1");
+            SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5_RUMBLE, "1");
+            SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS4, "1");
+            SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5, "1");
+            SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5_PLAYER_LED, "1");
+            SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
         }
 
         if (SDL_Init(SDL_INIT_EVENTS | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) != 0) {
@@ -115,6 +160,34 @@ public class ControllerManager {
         //We don't want any controller connections events (which are automatically generated at init)
         //since they interfere with us detecting new controllers, so we go through all events and clear them.
         while (SDL_PollEvent(&event));
+
+        return JNI_TRUE;
+    */
+
+    private native boolean nativeInitHaptics(String audioDriverName); /*
+        SDL_SetHint("SDL_AUDIODRIVER", audioDriverName);
+
+        if (SDL_Init(SDL_INIT_AUDIO) < 0) {
+            return JNI_FALSE;
+        }
+
+        return JNI_TRUE;
+    */
+
+    private native boolean nativeInitHaptics(); /*
+        if (SDL_Init(SDL_INIT_AUDIO) < 0) {
+            return JNI_FALSE;
+        }
+
+        return JNI_TRUE;
+    */
+
+    private native boolean nativeInitHapticsOnUnix(); /*
+        SDL_SetHint("SDL_AUDIODRIVER", "pipewire"); // Seems to work better with controller haptics
+
+        if (SDL_Init(SDL_INIT_AUDIO) < 0) {
+            return JNI_FALSE;
+        }
 
         return JNI_TRUE;
     */
@@ -196,7 +269,107 @@ public class ControllerManager {
     }
 
     /**
-     * Returns a the ControllerIndex object with the passed index (0 for p1, 1 for p2, etc.).
+     * Sends adaptive trigger effects to the controller at this given index.
+     * It the controller is not a DualSense controller calling this function doesn't have any effect.
+     *
+     * DualSense trigger effect <a href="https://controllers.fandom.com/wiki/Sony_DualSense#FFB_Trigger_Modes">documentation</a>.
+     *
+     * @param index The index of the controller that will be used to send the adaptive trigger data
+     * @param leftTriggerEffect The left trigger effect type
+     * @param triggerDataLeft The left trigger adaptive data
+     * @param rightTriggerEffect The right trigger effect type
+     * @param triggerDataRight The right trigger adaptive data
+     * @return true if the adaptive trigger data was sent successfully, false otherwise
+     * @throws IllegalStateException if Jamepad was not initialized
+     */
+    public boolean sendAdaptiveTriggerEffects(int index, byte leftTriggerEffect, byte[] triggerDataLeft, byte rightTriggerEffect, byte[] triggerDataRight){
+        verifyInitialized();
+
+        if(index < controllers.length && index >= 0) {
+            try {
+                return controllers[index].sendAdaptiveTriggerEffects(leftTriggerEffect, triggerDataLeft, rightTriggerEffect, triggerDataRight);
+            } catch (ControllerUnpluggedException e) {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Sends haptic feedback audio data to the controller at this given index.
+     * Audio Data must be in 3KHZ, 2 channel, 16-bit Little-Endian PCM format.
+     * It the controller is not a DualSense controller calling this function doesn't have any effect.
+     *
+     * @param index The index of the controller that will be used to send the adaptive trigger data
+     * @param hapticFeedback the haptic feedback audio data
+     * @return true if the haptic feedback audio data was sent successfully, false otherwise
+     * @throws IllegalStateException if Jamepad was not initialized
+     */
+    public boolean sendHapticFeedbackAudioData(int index, byte[] hapticFeedback) {
+        verifyInitialized();
+
+        if(index < controllers.length && index >= 0) {
+            try {
+                return controllers[index].sendHapticFeedbackAudioPacket(hapticFeedback);
+            } catch (ControllerUnpluggedException e) {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Checks if the controller at the given index supports touchpad inputs
+     *
+     * @param index The index of the controller to check if it has touchpad support
+     * @return true if the controller supports touchpad inputs, false otherwise
+     */
+    public boolean isSupportingTouchpadData(int index) {
+        verifyInitialized();
+
+        if(index < controllers.length && index >= 0) {
+            return controllers[index].isSupportingTouchpadData();
+        }
+
+        return false;
+    }
+
+    /**
+     * Checks if the controller at the given index supports sensor data
+     *
+     * @param index The index of the controller to check if it has sensor data support
+     * @return true if the controller supports sensor data, false otherwise
+     */
+    public boolean isSupportingSensorData(int index) {
+        verifyInitialized();
+
+        if(index < controllers.length && index >= 0) {
+            return controllers[index].isSupportingSensorData();
+        }
+
+        return false;
+    }
+
+    /**
+     * Checks if the controller at the given index supports haptic feedback
+     *
+     * @param index The index of the controller to check if it has haptic feedback support
+     * @return true if the controller supports haptic feedback, false otherwise
+     */
+    public boolean isSupportingHaptics(int index) {
+        verifyInitialized();
+
+        if(index < controllers.length && index >= 0) {
+            return controllers[index].isSupportingHaptics();
+        }
+
+        return false;
+    }
+
+    /**
+     * Returns the ControllerIndex object with the passed index (0 for p1, 1 for p2, etc.).
      *
      * You should only use this method if you're worried about the object allocations from getState().
      * If you decide to do things this way, your code will be a good bit more verbose and you'll
@@ -294,7 +467,7 @@ public class ControllerManager {
             while((read = source.read(data, 0, data.length)) != -1) {
                 buffer.write(data, 0, read);
             }
-            
+
             byte[] b = buffer.toByteArray();
             if(!nativeAddMappingsFromBuffer(b, b.length)) {
                 throw new IllegalStateException("Failed to set SDL controller mappings! Falling back to build in SDL mappings.");
@@ -306,13 +479,13 @@ public class ControllerManager {
             most people would use this library.
              */
             Path extractedLoc =  Files.createTempFile(null, null).toAbsolutePath();
-            
+
             Files.copy(source, extractedLoc, StandardCopyOption.REPLACE_EXISTING);
-    
+
             if(!nativeAddMappingsFromFile(extractedLoc.toString())) {
                 throw new IllegalStateException("Failed to set SDL controller mappings! Falling back to build in SDL mappings.");
             }
-    
+
             Files.delete(extractedLoc);
         }
     }
@@ -349,6 +522,10 @@ public class ControllerManager {
      * @return last error message logged by the native lib. Use this for debugging purposes.
      */
     public native String getLastNativeError(); /*
+        return env->NewStringUTF(SDL_GetError());
+    */
+
+    public native String getCurrentAudioDriverName(); /*
         return env->NewStringUTF(SDL_GetError());
     */
 

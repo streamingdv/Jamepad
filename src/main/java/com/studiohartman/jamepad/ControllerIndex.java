@@ -1,5 +1,11 @@
 package com.studiohartman.jamepad;
 
+import com.badlogic.gdx.utils.SharedLibraryLoader;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
+
 /**
  * This class is the main thing you're gonna need to deal with if you want lots of
  * control over your gamepads or want to avoid lots of ControllerState allocations.
@@ -17,12 +23,28 @@ public final class ControllerIndex {
     #include "SDL.h"
     */
 
+    private static final boolean IS_WINDOWS = System.getProperty("os.name", "").toLowerCase().contains("win");
+
     private static final float AXIS_MAX_VAL = 32767;
-    private int index;
+    private final int index;
     private long controllerPtr;
 
-    private boolean[] heldDownButtons;
-    private boolean[] justPressedButtons;
+    private final boolean[] heldDownButtons;
+    private final boolean[] justPressedButtons;
+
+    private final Configuration.SonyControllerFeature sonyControllerFeature;
+
+    private boolean supportsTouchpad = false;
+
+    private boolean supportsSensors = false;
+
+    private boolean supportsHaptic = false;
+
+    private boolean needToClearTriggerEffect = false;
+
+    private final SensorState sensorState = new SensorState();
+
+    private final Map<Integer, TouchState> touchStates = new HashMap<>();
 
     /**
      * Constructor. Builds a controller at the given index and attempts to connect to it.
@@ -30,9 +52,12 @@ public final class ControllerIndex {
      * before the native library is loaded or initialized.
      *
      * @param index The index of the controller
+     * @param sonyControllerFeature The indication for the controller if it should use Sony controller
+     *                                  features like motion data and touchpad
      */
-    ControllerIndex(int index) {
+    ControllerIndex(int index, Configuration.SonyControllerFeature sonyControllerFeature) {
         this.index = index;
+        this.sonyControllerFeature = sonyControllerFeature;
 
         heldDownButtons = new boolean[ControllerButton.values().length];
         justPressedButtons = new boolean[ControllerButton.values().length];
@@ -40,14 +65,117 @@ public final class ControllerIndex {
             heldDownButtons[i] = false;
             justPressedButtons[i] = false;
         }
-
         connectController();
     }
+
     private void connectController() {
         controllerPtr = nativeConnectController(index);
+        if(!Objects.equals(Configuration.SonyControllerFeature.NONE, sonyControllerFeature)) {
+            supportsTouchpad = nativeIsTouchpadSupported(controllerPtr);
+            supportsSensors = nativeEnableSensors(controllerPtr);
+        }
+        if(nativeIsDualSenseController(controllerPtr) &&
+                Objects.equals(Configuration.SonyControllerFeature.DUALSENSE_FEATURES_AND_HAPTICS, sonyControllerFeature)){
+            boolean result = nativeEnableHaptics();
+            if(result) {
+                supportsHaptic = nativeConnectHaptics(IS_WINDOWS);
+                if(!supportsHaptic){
+                    System.out.println("Connect haptics for DualSense did not working. Error: " + getLastNativeError());
+                }
+            } else {
+                System.out.println("Enable haptics for DualSense did not work. Error: " + getLastNativeError());
+            }
+        }
     }
+
+    /**
+     * @return last error message logged by the native lib. Use this for debugging purposes.
+     */
+    public native String getLastNativeError(); /*
+        return env->NewStringUTF(SDL_GetError());
+    */
+
     private native long nativeConnectController(int index); /*
         return (jlong) SDL_GameControllerOpen(index);
+    */
+
+    private native boolean nativeIsTouchpadSupported(long controllerPtr); /*{
+        SDL_GameController* pad = (SDL_GameController*) controllerPtr;
+        return SDL_GameControllerGetNumTouchpads(pad) > 0 ? JNI_TRUE : JNI_FALSE;
+    }*/
+
+    private native boolean nativeEnableSensors(long controllerPtr); /*
+        SDL_GameController* pad = (SDL_GameController*) controllerPtr;
+        if(SDL_GameControllerHasSensor(pad, SDL_SENSOR_ACCEL) && SDL_GameControllerHasSensor(pad, SDL_SENSOR_GYRO)) {
+            SDL_GameControllerSetSensorEnabled(pad, SDL_SENSOR_ACCEL, SDL_TRUE);
+		    SDL_GameControllerSetSensorEnabled(pad, SDL_SENSOR_GYRO, SDL_TRUE);
+
+		    return JNI_TRUE;
+        }
+        return JNI_FALSE;
+    */
+
+    /*JNI
+    uint8_t *haptics_resampler_buf = NULL;
+     */
+
+    /*JNI
+    #include <stdio.h>
+    */
+
+    private native boolean nativeEnableHaptics(); /*
+        SDL_AudioCVT cvt;
+	    int result = SDL_BuildAudioCVT(&cvt, AUDIO_S16LSB, 4, 3000, AUDIO_S16LSB, 4, 48000);
+	    if(result < 0) {
+	        return JNI_FALSE;
+	    }
+	    cvt.len = 240;  // 10 16bit stereo samples
+	    haptics_resampler_buf = (uint8_t*) SDL_calloc(cvt.len * cvt.len_mult, sizeof(uint8_t));
+	    return JNI_TRUE;
+    */
+
+    /*JNI
+    SDL_AudioDeviceID haptics_output = 0;
+     */
+
+    /*JNI
+    #include <string.h>
+    */
+
+    private native boolean nativeConnectHaptics(boolean isWindows); /*
+        if(haptics_output != 0) {
+            return JNI_TRUE; // already initialized
+        }
+
+        SDL_AudioSpec want, have;
+	    SDL_zero(want);
+	    want.freq = 48000;
+	    want.format = AUDIO_S16LSB;
+	    want.channels = 4;
+	    want.samples = 480; // 10ms buffer
+	    want.callback = NULL;
+
+	    for (int i=0; i < SDL_GetNumAudioDevices(0); i++)
+	    {
+	        const char* device_name = SDL_GetAudioDeviceName(i, 0);
+	        if(isWindows) {
+	            if (device_name == NULL || !strstr(device_name, "Wireless Controller")) {
+	                continue;
+	            }
+	        } else {
+	            if (device_name == NULL || !strstr(device_name, "DualSense")) {
+	                continue;
+	            }
+	        }
+	        haptics_output = SDL_OpenAudioDevice(device_name, 0, &want, &have, 0);
+	        if (haptics_output == 0) {
+	            continue;
+	        }
+	        SDL_PauseAudioDevice(haptics_output, 0);
+	        return JNI_TRUE;
+	    }
+
+	    return JNI_FALSE;
     */
 
     /**
@@ -55,21 +183,63 @@ public final class ControllerIndex {
      */
     public void close() {
         if(controllerPtr != 0) {
+            if(needToClearTriggerEffect){
+                // clear trigger effects
+                nativeSendAdaptiveTriggerEffects(controllerPtr, (byte) 0x05, new byte[10], 10, (byte) 0x05, new byte[10], 10);
+            }
             nativeClose(controllerPtr);
             controllerPtr = 0;
         }
+        touchStates.clear();
     }
+
+    /*JNI
+    #include <cstdlib>
+     */
+
     private native void nativeClose(long controllerPtr); /*
         SDL_GameController* pad = (SDL_GameController*) controllerPtr;
         if(pad && SDL_GameControllerGetAttached(pad)) {
             SDL_GameControllerClose(pad);
         }
         pad = NULL;
+        if(haptics_resampler_buf != NULL) {
+            free(haptics_resampler_buf);
+            haptics_resampler_buf = NULL;
+        }
+        if (haptics_output > 0)
+        {
+            SDL_CloseAudioDevice(haptics_output);
+		    haptics_output = 0;
+		}
     */
+
+    boolean isUsingSonyControllerFeatures() {
+        return !Objects.equals(Configuration.SonyControllerFeature.NONE, sonyControllerFeature);
+    }
+
+    public boolean isSupportingTouchpadData() {
+        return supportsTouchpad;
+    }
+
+    public boolean isSupportingSensorData() {
+        return supportsSensors;
+    }
+
+    public boolean isSupportingHaptics() { return supportsHaptic; }
+
+    /**
+     * Get the current sony configuration feature of this controller.
+     *
+     * @return the indication of which sony features this controller is using.
+     */
+    public Configuration.SonyControllerFeature getSonyControllerFeatureConfig() {
+        return sonyControllerFeature;
+    }
 
     /**
      * Close and reconnect to the native gamepad at the index associated with this ControllerIndex object.
-     * This is will refresh the gamepad represented here. This should be called if something is plugged
+     * This will refresh the gamepad represented here. This should be called if something is plugged
      * in or unplugged.
      *
      * @return whether or not the controller could successfully reconnect.
@@ -247,7 +417,7 @@ public final class ControllerIndex {
     /**
      * Returns the implementation dependent name of this controller.
      *
-     * @return The the name of this controller
+     * @return The name of this controller
      * @throws ControllerUnpluggedException If the controller is not connected
      */
     public String getName() throws ControllerUnpluggedException {
@@ -326,6 +496,217 @@ public final class ControllerIndex {
         return SDL_JoystickCurrentPowerLevel(joystick);
     */
 
+
+    /**
+     * To use this function Sony controller features must be enabled in configuration of the
+     * {@link com.studiohartman.jamepad.ControllerManager}.
+     * @param finger the index of the finger of interest
+     * @return a TouchState object containing the touch information of the finger.
+     * If the operation was not successful e.g. because the controller doesn't have
+     * a touchpad then a default TouchState object is returned.
+     * @throws ControllerUnpluggedException If the controller is not connected
+     */
+    public TouchState getTouchpadFinger(int finger) throws ControllerUnpluggedException {
+        ensureConnected();
+
+        TouchState touchState = touchStates.get(finger);
+        if(touchState == null){
+            touchState = new TouchState();
+            touchStates.put(finger, touchState);
+        }
+        if(!supportsTouchpad){
+            return touchState;
+        }
+        nativeGetTouchpadFinger(controllerPtr, finger, touchState);
+
+        return touchState;
+    }
+
+    private native void nativeGetTouchpadFinger(long controllerPtr, int finger, Object touchState); /*
+        SDL_GameControllerUpdate();
+        SDL_GameController* pad = (SDL_GameController*) controllerPtr;
+
+        Uint8 touch_state;
+        float x, y, pressure;
+        int result = SDL_GameControllerGetTouchpadFinger(pad, 0, finger, &touch_state, &x, &y, &pressure);
+        if(result == 0) {
+            jclass clazz = env->GetObjectClass(touchState);
+            jmethodID update_method = env->GetMethodID(clazz, "update", "(ZFF)V");
+
+            env->CallVoidMethod(touchState, update_method, touch_state == 0 ? JNI_FALSE : JNI_TRUE, x, y);
+        }
+     */
+
+    /**
+     * To use this function Sony controller features must be enabled in configuration of the
+     * {@link com.studiohartman.jamepad.ControllerManager}.
+     * @return a SensorState object containing the sensor information of the controller.
+     * If Sony controller features are not enabled or if the controller doesn't support sensor
+     * data then a default SensorState will be returned.
+     * @throws ControllerUnpluggedException If the controller is not connected
+     */
+    public SensorState getSensorState() throws ControllerUnpluggedException {
+        ensureConnected();
+        if(!supportsSensors) {
+            return sensorState;
+        }
+        nativeGetSensorState(controllerPtr, sensorState);
+
+        return sensorState;
+    }
+
+    /*JNI
+    #include <chrono>
+     */
+
+    private native void nativeGetSensorState(long controllerPtr, Object sensorState);/*
+        SDL_GameControllerUpdate();
+        SDL_GameController* pad = (SDL_GameController*) controllerPtr;
+
+        float gyro_data[3], accel_data[3];
+		int resultGyro = SDL_GameControllerGetSensorData(pad, SDL_SENSOR_GYRO, &gyro_data[0], 3);
+		int resultAccel = SDL_GameControllerGetSensorData(pad, SDL_SENSOR_ACCEL, &accel_data[0], 3);
+		Uint64 microsecondsSinceEpoch = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+
+		if(resultGyro == 0 && resultAccel == 0) {
+		   jclass clazz = env->GetObjectClass(sensorState);
+		   jmethodID update_method = env->GetMethodID(clazz, "update", "(FFFFFFJ)V");
+
+		   env->CallVoidMethod(sensorState, update_method, accel_data[0], accel_data[1], accel_data[2], gyro_data[0], gyro_data[1], gyro_data[2], microsecondsSinceEpoch);
+		}
+    */
+
+    /**
+     * Send adaptive trigger effects to the controller.
+     * If the controller is not a DualSense controller calling this function doesn't have any effect.
+     * @param leftTriggerEffect the left trigger effect type
+     * @param triggerDataLeft the left trigger adaptive data
+     * @param rightTriggerEffect the right trigger effect type
+     * @param triggerDataRight the right trigger adaptive data
+     * @return true if the adaptive trigger data was sent successfully, false otherwise
+     * @throws ControllerUnpluggedException If the controller is not connected
+     */
+    public boolean sendAdaptiveTriggerEffects(byte leftTriggerEffect, byte[] triggerDataLeft, byte rightTriggerEffect, byte[] triggerDataRight) throws ControllerUnpluggedException {
+        ensureConnected();
+
+        if(!hasBasicDualSenseFeatures() || !nativeIsDualSenseController(controllerPtr)) {
+            return false;
+        }
+
+        needToClearTriggerEffect = true;
+        return nativeSendAdaptiveTriggerEffects(controllerPtr, leftTriggerEffect, triggerDataLeft, triggerDataLeft.length, rightTriggerEffect, triggerDataRight, triggerDataRight.length);
+    }
+
+    private native boolean nativeIsDualSenseController(long controllerPtr); /*
+        SDL_GameController* pad = (SDL_GameController*) controllerPtr;
+        Uint16 sonyVendorId = 0x054c;
+        Uint16 dualSenseProductId = 0x0ce6;
+        Uint16 dualSenseEdgeProductId = 0x0df2;
+
+        Uint16 vendorId = SDL_GameControllerGetVendor(pad);
+        Uint16 productId = SDL_GameControllerGetProduct(pad);
+
+        return vendorId == sonyVendorId && (productId == dualSenseProductId || productId == dualSenseEdgeProductId) ? JNI_TRUE : JNI_FALSE;
+    */
+
+    // PS5 trigger effect documentation:
+    // https://controllers.fandom.com/wiki/Sony_DualSense#FFB_Trigger_Modes
+    /*JNI
+    typedef struct
+    {
+        Uint8 ucEnableBits1;                // 0
+        Uint8 ucEnableBits2;                // 1
+        Uint8 ucRumbleRight;                // 2
+        Uint8 ucRumbleLeft;                 // 3
+        Uint8 ucHeadphoneVolume;            // 4
+        Uint8 ucSpeakerVolume;              // 5
+        Uint8 ucMicrophoneVolume;           // 6
+        Uint8 ucAudioEnableBits;            // 7
+        Uint8 ucMicLightMode;               // 8
+        Uint8 ucAudioMuteBits;              // 9
+        Uint8 rgucRightTriggerEffect[11];   // 10
+        Uint8 rgucLeftTriggerEffect[11];    // 21
+        Uint8 rgucUnknown1[6];              // 32
+        Uint8 ucLedFlags;                   // 38
+        Uint8 rgucUnknown2[2];              // 39
+        Uint8 ucLedAnim;                    // 41
+        Uint8 ucLedBrightness;              // 42
+        Uint8 ucPadLights;                  // 43
+        Uint8 ucLedRed;                     // 44
+        Uint8 ucLedGreen;                   // 45
+        Uint8 ucLedBlue;                    // 46
+    } DS5EffectsState_t;
+     */
+
+    private native boolean nativeSendAdaptiveTriggerEffects(long controllerPtr,
+                                                         byte leftTriggerEffect,
+                                                         byte[] triggerDataLeft,
+                                                         int leftTriggerDataSize,
+                                                         byte rightTriggerEffect,
+                                                         byte[] triggerDataRight,
+                                                         int rightTriggerDataSize); /*
+        SDL_GameController* pad = (SDL_GameController*) controllerPtr;
+
+        DS5EffectsState_t state;
+        SDL_zero(state);
+
+        state.ucEnableBits1 |= (0x04 | 0x08); // Modify right and left trigger effect respectively
+        state.rgucLeftTriggerEffect[0] = leftTriggerEffect;
+        SDL_memcpy(state.rgucLeftTriggerEffect + 1, triggerDataLeft, leftTriggerDataSize);
+        state.rgucRightTriggerEffect[0] = rightTriggerEffect;
+        SDL_memcpy(state.rgucRightTriggerEffect + 1, triggerDataRight, rightTriggerDataSize);
+
+        return SDL_GameControllerSendEffect(pad, &state, sizeof(state)) == 0 ? JNI_TRUE : JNI_FALSE;
+    */
+
+    /**
+     * Send haptic feedback audio data to the controller.
+     * Audio Data must be in 3KHZ, 2 channel, 16-bit Little-Endian PCM format.
+     * If the controller is not a DualSense controller calling this function doesn't have any effect.
+     * @param hapticFeedback the haptic feedback audio data
+     * @return true if the haptic feedback audio data was sent successfully, false otherwise
+     * @throws ControllerUnpluggedException If the controller is not connected
+     */
+    public boolean sendHapticFeedbackAudioPacket(byte[] hapticFeedback) throws ControllerUnpluggedException {
+        ensureConnected();
+
+        if(!hasBasicDualSenseFeatures() || !nativeIsDualSenseController(controllerPtr)) {
+            return false;
+        }
+
+        return nativeSendHapticFeedback(hapticFeedback, hapticFeedback.length);
+    }
+
+    private native boolean nativeSendHapticFeedback(byte[] hapticFeedback, int hapticFeedbackSize); /*
+        if(haptics_output == 0) {
+            return JNI_FALSE;
+        }
+
+        SDL_AudioCVT cvt;
+        // Haptics samples are coming in at 3KHZ, but the DualSense expects 48KHZ
+        SDL_BuildAudioCVT(&cvt, AUDIO_S16LSB, 4, 3000, AUDIO_S16LSB, 4, 48000);
+        cvt.len = hapticFeedbackSize * 2;
+        cvt.buf = haptics_resampler_buf;
+        // Remix to 4 channels
+	    for (int i=0; i < hapticFeedbackSize; i+=4)
+	    {
+		    SDL_memset(haptics_resampler_buf + i * 2, 0, 4);
+		    SDL_memcpy(haptics_resampler_buf + (i * 2) + 4, hapticFeedback + i, 4);
+	    }
+	    // Resample to 48kHZ
+	    if (SDL_ConvertAudio(&cvt) != 0)
+	    {
+		    return JNI_FALSE;
+	    }
+
+	    if (SDL_QueueAudio(haptics_output, cvt.buf, cvt.len_cvt) < 0)
+	    {
+		    return JNI_FALSE;
+	    }
+
+	    return JNI_TRUE;
+    */
+
     /**
      * Convenience method to throw an exception if the controller is not connected.
      */
@@ -333,5 +714,14 @@ public final class ControllerIndex {
         if(!isConnected()) {
             throw new ControllerUnpluggedException("Controller at index " + index + " is not connected!");
         }
+    }
+
+    /**
+     * Convenience method to check if the controller supports basic DualSense features.
+     * @return true if the controller supports basic DualSense features
+     */
+    private boolean hasBasicDualSenseFeatures() {
+        return Objects.equals(Configuration.SonyControllerFeature.DUALSENSE_FEATURES, sonyControllerFeature) ||
+                Objects.equals(Configuration.SonyControllerFeature.DUALSENSE_FEATURES_AND_HAPTICS, sonyControllerFeature);
     }
 }

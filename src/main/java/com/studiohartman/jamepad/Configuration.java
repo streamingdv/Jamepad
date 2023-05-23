@@ -27,4 +27,41 @@ public class Configuration {
      * Disable this to return to legacy temporary file loading of database file.
      */
     public boolean loadDatabaseInMemory = true;
+
+    /**
+     * Enable Sony controller features like touchpad and motion sensors.
+     * DualSense also offers adaptive trigger and haptic feedback support
+     */
+    public SonyControllerFeature useSonyControllerFeatures = SonyControllerFeature.NONE;
+
+    public enum SonyControllerFeature {
+        /**
+         * Do not use any advanced Sony controller features
+         */
+        NONE(0),
+        /**
+         * Activate advanced DualSense features like touchpad and motion sensors
+         */
+        DUALSHOCK_FEATURES(1),
+
+        /**
+         * Activate advanced DualSense features like touchpad, motion sensors, adaptive triggers
+         */
+        DUALSENSE_FEATURES(2),
+
+        /**
+         * Activate advanced DualSense features like touchpad, motion sensors, adaptive triggers and haptic feedback
+         */
+        DUALSENSE_FEATURES_AND_HAPTICS(3);
+
+        private final int value;
+        private SonyControllerFeature(int value) {
+            this.value = value;
+        }
+
+        public int getValue() {
+            return value;
+        }
+
+    }
 }
