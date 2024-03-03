@@ -66,46 +66,46 @@ dependencies {
 apply plugin: "com.badlogicgames.gdx.gdx-jnigen"
 
 ext.getSdl2CFlags = { workingDir ->
-	try {
-		String executable = 'sdl2-config2';
-		if(workingDir != null) {
-			executable = workingDir + executable;
-			if(!file(executable).exists()) {
-				return "";
-			}
-	    }
-	
-	    def output = new ByteArrayOutputStream()
-	    project.exec {
-	        commandLine executable, '--cflags'
-	        standardOutput = output
-	        ignoreExitValue true
-	    }
-	    return output.toString().trim();
-	} catch(Exception e) {
-		return "";
-	}
+    try {
+        String executable = 'sdl2-config2';
+        if(workingDir != null) {
+            executable = workingDir + executable;
+            if(!file(executable).exists()) {
+                return "";
+            }
+        }
+
+        def output = new ByteArrayOutputStream()
+        project.exec {
+            commandLine executable, '--cflags'
+            standardOutput = output
+            ignoreExitValue true
+        }
+        return output.toString().trim();
+    } catch(Exception e) {
+        return "";
+    }
 }
 ext.getSdl2StaticLibs = { workingDir ->
-	try {
-		String executable = 'sdl2-config';
-		if(workingDir != null) {
-			executable = workingDir + executable;
-			if(!file(executable).exists()) {
-				return "";
-			}
-	    }
-	
-	    def output = new ByteArrayOutputStream()
-	    project.exec {
-	        commandLine executable, '--static-libs'
-	        standardOutput = output
-	        ignoreExitValue true
-	    }
-	    return output.toString().trim();
-	} catch(Exception e) {
-		return "";
-	}
+    try {
+        String executable = 'sdl2-config';
+        if(workingDir != null) {
+            executable = workingDir + executable;
+            if(!file(executable).exists()) {
+                return "";
+            }
+        }
+
+        def output = new ByteArrayOutputStream()
+        project.exec {
+            commandLine executable, '--static-libs'
+            standardOutput = output
+            ignoreExitValue true
+        }
+        return output.toString().trim();
+    } catch(Exception e) {
+        return "";
+    }
 }
 
 jnigen {
