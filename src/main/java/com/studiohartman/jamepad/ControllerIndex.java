@@ -2,9 +2,7 @@ package com.studiohartman.jamepad;
 
 import com.badlogic.gdx.utils.SharedLibraryLoader;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
 
 /**
  * This class is the main thing you're gonna need to deal with if you want lots of
@@ -78,14 +76,26 @@ public final class ControllerIndex {
                 Objects.equals(Configuration.SonyControllerFeature.DUALSENSE_FEATURES_AND_HAPTICS, sonyControllerFeature)){
             boolean result = nativeEnableHaptics();
             if(result) {
-                supportsHaptic = nativeConnectHaptics(IS_WINDOWS);
-                if(!supportsHaptic){
-                    System.out.println("Connect haptics for DualSense did not working. Error: " + getLastNativeError());
-                }
+                connectHaptics();
             } else {
                 System.out.println("Enable haptics for DualSense did not work. Error: " + getLastNativeError());
             }
         }
+    }
+
+    private void connectHaptics() {
+        final Timer timer = new Timer();
+        timer.schedule(
+                new TimerTask() {
+                    @Override
+                    public void run() {
+                        supportsHaptic = nativeConnectHaptics(IS_WINDOWS);
+                        if(!supportsHaptic){
+                            System.out.println("Connect haptics for DualSense did not working. Error: " + getLastNativeError());
+                        }
+                        timer.cancel();
+                    }
+                }, 1000);
     }
 
     /**

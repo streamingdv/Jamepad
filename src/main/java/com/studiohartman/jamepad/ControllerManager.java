@@ -165,6 +165,9 @@ public class ControllerManager {
     */
 
     private native boolean nativeInitHaptics(String audioDriverName); /*
+        if(SDL_WasInit(SDL_INIT_AUDIO) != 0) {
+            return JNI_TRUE;
+        }
         SDL_SetHint("SDL_AUDIODRIVER", audioDriverName);
 
         if (SDL_Init(SDL_INIT_AUDIO) < 0) {
@@ -175,6 +178,9 @@ public class ControllerManager {
     */
 
     private native boolean nativeInitHaptics(); /*
+        if(SDL_WasInit(SDL_INIT_AUDIO) != 0) {
+            return JNI_TRUE;
+        }
         if (SDL_Init(SDL_INIT_AUDIO) < 0) {
             return JNI_FALSE;
         }
@@ -183,6 +189,9 @@ public class ControllerManager {
     */
 
     private native boolean nativeInitHapticsOnUnix(); /*
+        if(SDL_WasInit(SDL_INIT_AUDIO) != 0) {
+            return JNI_TRUE;
+        }
         SDL_SetHint("SDL_AUDIODRIVER", "pipewire"); // Seems to work better with controller haptics
 
         if (SDL_Init(SDL_INIT_AUDIO) < 0) {
