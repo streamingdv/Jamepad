@@ -23,6 +23,9 @@ public final class ControllerIndex {
 
     private static final boolean IS_WINDOWS = System.getProperty("os.name", "").toLowerCase().contains("win");
 
+    private static final boolean IS_MAC = System.getProperty("os.name", "").toLowerCase().contains("mac")
+            || System.getProperty("os.name", "").toLowerCase().contains("darwin");
+
     private static final float AXIS_MAX_VAL = 32767;
     private final int index;
     private long controllerPtr;
@@ -76,26 +79,33 @@ public final class ControllerIndex {
                 Objects.equals(Configuration.SonyControllerFeature.DUALSENSE_FEATURES_AND_HAPTICS, sonyControllerFeature)){
             boolean result = nativeEnableHaptics();
             if(result) {
-                connectHaptics();
+                connectHaptics(1_000, 0);
             } else {
                 System.out.println("Enable haptics for DualSense did not work. Error: " + getLastNativeError());
             }
         }
     }
 
-    private void connectHaptics() {
+    private void connectHaptics(final int timeout, final int count) {
         final Timer timer = new Timer();
         timer.schedule(
                 new TimerTask() {
                     @Override
                     public void run() {
-                        supportsHaptic = nativeConnectHaptics(IS_WINDOWS);
+                        if(!isConnected()){
+                            return; // If not connected anymore skip connect haptics
+                        }
+                        supportsHaptic = nativeConnectHaptics(IS_WINDOWS || IS_MAC);
                         if(!supportsHaptic){
-                            System.out.println("Connect haptics for DualSense did not working. Error: " + getLastNativeError());
+                            if(count == 0) {
+                                connectHaptics(10_000, count + 1); // try again one more time after timeout
+                            } else {
+                                System.out.println("Connect haptics for DualSense did not working. Error: " + getLastNativeError());
+                            }
                         }
                         timer.cancel();
                     }
-                }, 1000);
+                }, timeout);
     }
 
     /**
@@ -152,7 +162,7 @@ public final class ControllerIndex {
     #include <string.h>
     */
 
-    private native boolean nativeConnectHaptics(boolean isWindows); /*
+    private native boolean nativeConnectHaptics(boolean isWindowsOrMac); /*
         if(haptics_output != 0) {
             return JNI_TRUE; // already initialized
         }
@@ -168,7 +178,7 @@ public final class ControllerIndex {
 	    for (int i=0; i < SDL_GetNumAudioDevices(0); i++)
 	    {
 	        const char* device_name = SDL_GetAudioDeviceName(i, 0);
-	        if(isWindows) {
+	        if(isWindowsOrMac) {
 	            if (device_name == NULL || !strstr(device_name, "Wireless Controller")) {
 	                continue;
 	            }
