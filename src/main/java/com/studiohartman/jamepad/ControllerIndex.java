@@ -93,7 +93,7 @@ public final class ControllerIndex {
                     @Override
                     public void run() {
                         if(!isConnected()){
-                            return; // If not connected anymore skip connect haptics
+                            return;
                         }
                         supportsHaptic = nativeConnectHaptics(IS_WINDOWS || IS_MAC);
                         if(!supportsHaptic){
