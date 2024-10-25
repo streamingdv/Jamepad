@@ -5,6 +5,7 @@ on:
     branches:
       - master
       - sdl/**
+  workflow_dispatch:
 env:
   GRADLE_USER_HOME: .gradle
 
